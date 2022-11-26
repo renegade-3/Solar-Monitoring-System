@@ -1,0 +1,305 @@
+#include <Wire.h>
+#include <BH1750.h>
+#include "WiFi.h"
+#include "Firebase_ESP_Client.h"
+#include <NTPClient.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
+BH1750 lightMeter;
+
+
+
+#define UTC_OFFSET_IN_SECONDS 19800         // offset from greenwich time
+
+                                            // SSID and password of Wifi connection:
+const char* ssid = NULL;
+const char* password = NULL;
+
+char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+
+                                           // Define NTP Client to get time
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", UTC_OFFSET_IN_SECONDS);
+
+
+                                          //Provide the token generation process info.
+#include "addons/TokenHelper.h"
+                                         //Provide the RTDB payload printing info and other helper functions.
+#include "addons/RTDBHelper.h"
+
+                                       // Insert Firebase project API Key
+#define API_KEY "NULL"
+
+                                      // Insert RTDB URLefine the RTDB URL */
+#define DATABASE_URL "NULL" 
+
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+unsigned long sendDataPrevMillis = 0;
+bool signupOK = false;
+
+
+
+const int RELAY_PIN1=18;            // Initializing pins on the ESP
+const int RELAY_PIN2=19;
+const int solar_panel_current_pin=32;
+const int battery_current_pin=33;
+const int solar_panel_pin= 34;
+const int battery_pin= 35;
+
+
+
+float vOUT1 = 0.0;                 //Constants to be used during the program
+float vOUT2 = 0.0;
+int value1 = 0;
+int value2 = 0;
+float R1 = 30000.0;
+float R2 = 7500.0;
+float solar_panel_voltage=0;
+float battery_voltage=0;
+const int averageValue = 500;
+long int sensorValue1 = 0;
+long int sensorValue2 = 0;
+float voltage1 = 0;
+float current1 = 0;
+float voltage2 = 0;
+float current2 = 0;
+
+
+
+String randString1;
+String randString2;
+int randNumber1;
+int randNumber2;
+char bb[] = {"QWERTYUIOPASDFGHJKLZXCVBNM"};
+
+
+
+
+
+ 
+void setup(){
+ 
+  Serial.begin(115200);  //Start transmission of data at 115200 baud rate
+  
+ 
+  Wire.begin();
+  
+  lightMeter.configure(BH1750::CONTINUOUS_HIGH_RES_MODE_2);
+  lightMeter.begin();
+
+  pinMode(RELAY_PIN1, OUTPUT);
+  pinMode(RELAY_PIN2, OUTPUT);
+
+  
+  WiFi.begin(ssid, password);
+
+  while ( WiFi.status() != WL_CONNECTED ) {
+    delay ( 500 );
+    Serial.print ( "." );
+  }
+
+  timeClient.begin();
+  Serial.println();
+  Serial.print("Connected with IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.println();
+
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+  
+                                                             // Sign up 
+  if (Firebase.signUp(&config, &auth, "", "")){
+    Serial.println("ok");
+    signupOK = true;
+  }
+  else {
+    Serial.printf("%s\n", config.signer.signupError.message.c_str());
+  }
+
+  config.token_status_callback = tokenStatusCallback;
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+}
+ 
+
+ 
+
+
+void loop(){
+
+  String uid = getUID();                      //Set a Unique ID to the specific batch
+  float lux = lightMeter.readLightLevel();    //Get Luxmeter reading
+  Serial.print(lux);
+  Serial.print(" Lux ");
+
+  value1 = analogRead(solar_panel_pin);      //Get the input value from the solar panel voltage sensor
+  vOUT1= (value1 * 3.3) /4096;
+  solar_panel_voltage = vOUT1 / (R2/(R1+R2));
+  Serial.print(solar_panel_voltage);
+  Serial.print(" V ");
+
+  value2 = analogRead(battery_pin);          //Get the input value from the battery voltage sensor
+  vOUT2 = (value2 * 3.3) /4096;
+  battery_voltage = vOUT2 / (R2/(R1+R2));
+  Serial.print(battery_voltage);
+  Serial.print(" V ");
+  
+
+    for (int i = 0; i < averageValue; i++)
+  {
+    sensorValue1 += analogRead(solar_panel_current_pin);  //Current measurement between solar panel and battery
+    sensorValue2+= analogRead(battery_current_pin);     //Current measurement between battery and LED
+  }
+
+  sensorValue1 = sensorValue1 / averageValue;
+  voltage1 = sensorValue1 * 3.3 /4096;
+  current1 = abs((voltage1 - 2.28) / 0.066);
+
+  sensorValue2 = sensorValue2 / averageValue;
+  voltage2 = sensorValue2 * 3.3 /4096;
+  current2 = abs((voltage2 - 2.29) / 0.100);
+  
+
+
+
+  if (solar_panel_voltage<battery_voltage)  //Switch for charging and discharging
+  {
+  digitalWrite(RELAY_PIN1,LOW);
+  digitalWrite(RELAY_PIN2,HIGH);
+  current1=0.0;
+  }
+  else
+  {
+  digitalWrite(RELAY_PIN1,HIGH);
+  digitalWrite(RELAY_PIN2,LOW);
+  current2=0.0;
+  }
+
+  Serial.print(current1);
+  Serial.print(" A ");
+
+  Serial.print(current2);
+  Serial.print(" A ");
+
+  timeClient.update();
+  Serial.print(" ");
+  String timedata=getTimeStampString();           //Get time and date from system 
+  Serial.println(timedata);
+
+
+
+  if (Firebase.ready() && signupOK && (millis() - sendDataPrevMillis > 15000 || sendDataPrevMillis == 0)){
+      sendDataPrevMillis = millis();
+      
+     
+
+                                                                                      // Write all the values on the database path test/float
+      String obj=getUID();
+      String path1 = "test/" + obj + "/solar_panel_voltage";
+      String path2 = "test/" + obj + "/battery_voltage";
+      String path3 = "test/" + obj + "/date_time";
+      String path4 = "test/" + obj + "/lux";
+      String path5 = "test/" + obj + "/solar_panel_current";
+      String path6 = "test/" + obj + "/battery_current";
+
+
+      if (Firebase.RTDB.setString(&fbdo, path3, timedata)){                                           //Checking if the values were passed
+        Serial.println("PASSED");
+        Serial.println("PATH: " + fbdo.dataPath());
+        Serial.println("TYPE: " + fbdo.dataType());
+      }
+      else {
+        Serial.println("FAILED");
+        Serial.println("REASON: " + fbdo.errorReason());
+      }
+
+      if (Firebase.RTDB.setFloat(&fbdo, path1,solar_panel_voltage )){
+        Serial.println("PASSED");
+        Serial.println("PATH: " + fbdo.dataPath());
+        Serial.println("TYPE: " + fbdo.dataType());
+      }
+      else {
+        Serial.println("FAILED");
+        Serial.println("REASON: " + fbdo.errorReason());
+      }
+
+     if (Firebase.RTDB.setFloat(&fbdo, path4, lux)){
+        Serial.println("PASSED");
+        Serial.println("PATH: " + fbdo.dataPath());
+        Serial.println("TYPE: " + fbdo.dataType());
+      }
+      else {
+        Serial.println("FAILED");
+        Serial.println("REASON: " + fbdo.errorReason());
+      }
+
+     if (Firebase.RTDB.setFloat(&fbdo, path2,battery_voltage)){
+        Serial.println("PASSED");
+        Serial.println("PATH: " + fbdo.dataPath());
+        Serial.println("TYPE: " + fbdo.dataType());
+      }
+      else {
+        Serial.println("FAILED");
+        Serial.println("REASON: " + fbdo.errorReason());
+      }
+      if (Firebase.RTDB.setFloat(&fbdo, path5,current1)){
+        Serial.println("PASSED");
+        Serial.println("PATH: " + fbdo.dataPath());
+        Serial.println("TYPE: " + fbdo.dataType());
+      }
+      else {
+        Serial.println("FAILED");
+        Serial.println("REASON: " + fbdo.errorReason());
+      }
+      if (Firebase.RTDB.setFloat(&fbdo, path6,current2)){
+        Serial.println("PASSED");
+        Serial.println("PATH: " + fbdo.dataPath());
+        Serial.println("TYPE: " + fbdo.dataType());
+      }
+      else {
+        Serial.println("FAILED");
+        Serial.println("REASON: " + fbdo.errorReason());
+      }
+  }
+
+  delay(15000);
+}
+
+
+String getTimeStampString() {                                             //Function to convert time to string
+  time_t rawtime = timeClient.getEpochTime();
+  struct tm * ti;
+  ti = localtime (&rawtime);
+
+  uint16_t year = ti->tm_year + 1900;
+  String yearStr = String(year);
+
+  uint8_t month = ti->tm_mon + 1;
+  String monthStr = month < 10 ? "0" + String(month) : String(month);
+
+  uint8_t day = ti->tm_mday;
+  String dayStr = day < 10 ? "0" + String(day) : String(day);
+
+  uint8_t hours = ti->tm_hour;
+  String hoursStr = hours < 10 ? "0" + String(hours) : String(hours);
+
+  uint8_t minutes = ti->tm_min;
+  String minuteStr = minutes < 10 ? "0" + String(minutes) : String(minutes);
+
+  uint8_t seconds = ti->tm_sec;
+  String secondStr = seconds < 10 ? "0" + String(seconds) : String(seconds);
+
+  return dayStr + " " + monthStr + " " + yearStr + " " +hoursStr + ":" + minuteStr + ":" + secondStr;      
+}
+
+
+
+String getUID() {                                                                                         //Function to generate a unique ID
+  randString1 = String(bb[random(0,25)]) + String(bb[random(0,25)]) + String(bb[random(0,25)]);
+  randString2 = String(bb[random(0,25)]) + String(bb[random(0,24)]) + String(bb[random(0,25)]);
+  String UID = randString1 + String(random(0,1000)) + randString2 + String(random(0,1000));
+  return(UID);
+}
