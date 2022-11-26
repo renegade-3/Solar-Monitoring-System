@@ -1,15 +1,4 @@
-# Solar Array Monitoring System
-Ishaan Mukherjee (PES1UG19EE041)
-Divyansh Mitra (PES1UG19EE032)
-M Ankur Bheemaiah (PES1UG19EE051)
 
-Developed over the course of the internship for the IoT Dept at PESU.
-This project is able to provide realtime monitoring of a solar panel along with a connected energy storage. Monitored data
-includes voltage, current, power, light level, charging status, etc.
-
-## Overview
-### 1. Arduino Setup
-### 2. Web App Setup
 
 ## Arduino Setup
 1. The hardware setup is provided as a reference image in the repository named _circuit-diagram-01.png_.
